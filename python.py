@@ -1,0 +1,1 @@
+print ("Utkarsh is gay.")
