@@ -1,5 +1,5 @@
  # the falcon project
-Hello World, We are  Vivaan Ghosal and Aayush Dugar trying to develop an affordable NVI system. 
+Hello World, We are  Vivaan Ghosal and Aayush Dugar trying to develop an affordable NDVI system. 
 
 Developing our falcon agricultural idea, 
 
