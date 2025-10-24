@@ -1,76 +1,107 @@
 #!/usr/bin/env python3
+
 """
-NDVI-Style Gradient Map Generator for Raspberry Pi 5
-----------------------------------------------------
-Fetches an RGB image, computes a simulated NDVI map, generates a colorized gradient,
-and saves the processed output to a specified directory.
+Autonomous NDVI-Style Image Processor
+---------------------------------------------------------
+- Start trigger: GPIO 5 → begins capturing RGB frames every 10 seconds
+- Stop trigger: GPIO 6 → halts capture and finalizes NDVI processing
+- Each image is NDVI-processed using (G - R) / (G + R)
+- Output saved with timestamps and logged automatically
 """
+
 
 import cv2
 import numpy as np
+import time
 import os
+import RPi.GPIO as GPIO
+from picamera2 import Picamera2
 from datetime import datetime
 
-def generate_ndvi_gradient(input_image_path, output_directory, colormap=cv2.COLORMAP_TURBO):
+# ========== CONFIGURATION ==========
+SAVE_DIR = "/home/pi/captures"   # directory to store images, 2 folders will be created, one with RAW and one with captured images
+CAPTURE_INTERVAL = 10                 # seconds between captures
+START_PIN = 5                         # flight controller connected trigger to turn on
+STOP_PIN = 6                          # flight controller trigger to terminate the process
+
+# ========== SETUP ==========
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(START_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(STOP_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+os.makedirs(SAVE_DIR, exist_ok=True)
+camera = Picamera2()
+camera.configure(camera.create_still_configuration(main={"size": (1280, 720)}))
+
+def calculate_pseudo_ndvi(image):
     """
-    Generate an NDVI-style gradient heat map from an RGB image.
-
-    Args:
-        input_image_path (str): Path to the input RGB image.
-        output_directory (str): Directory to save the NDVI gradient map.
-        colormap: OpenCV colormap for NDVI visualization (default: TURBO).
+    Since Pi Rev1.3 camera is RGB only (no NIR filter), we simulate NDVI using
+    the Red and Blue channels as proxies.
+    Formula: NDVI ≈ (R - B) / (R + B)
+    This gives a 'vegetation index'-like gradient.
     """
+    b, g, r = cv2.split(image.astype(float))
+    ndvi = (r - b) / (r + b + 1e-5)
+    ndvi_normalized = cv2.normalize(ndvi, None, 0, 255, cv2.NORM_MINMAX)
+    ndvi_colormap = cv2.applyColorMap(ndvi_normalized.astype(np.uint8), cv2.COLORMAP_JET)
+    return ndvi_colormap
 
-    # --- Step 1: Validate paths and prepare directories ---
-    if not os.path.exists(input_image_path):
-        raise FileNotFoundError(f"❌ Image not found: {input_image_path}")
-    
-    os.makedirs(output_directory, exist_ok=True)
+def capture_and_process():
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    raw_path = os.path.join(SAVE_DIR, f"raw_{timestamp}.jpg")
+    ndvi_path = os.path.join(SAVE_DIR, f"ndvi_{timestamp}.jpg")
 
-    # --- Step 2: Load the RGB image ---
-    image = cv2.imread(input_image_path)
-    if image is None:
-        raise ValueError("⚠️ Could not load image. Check format or path.")
-    print(f"✅ Image loaded: {image.shape[1]}x{image.shape[0]} pixels")
+    # Capture image
+    camera.start()
+    time.sleep(2)  # camera warm-up
+    image = camera.capture_array()
+    camera.stop()
 
-    # --- Step 3: Convert to RGB (OpenCV loads as BGR) ---
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(float)
+    # Save raw image
+    cv2.imwrite(raw_path, image)
 
-    # --- Step 4: Extract color channels ---
-    r = rgb_image[:, :, 0]
-    g = rgb_image[:, :, 1]
+    # Process NDVI-like gradient
+    ndvi_image = calculate_pseudo_ndvi(image)
+    cv2.imwrite(ndvi_path, ndvi_image)
 
-    # --- Step 5: Compute NDVI-style index ---
-    # NDVI ≈ (G - R) / (G + R)
-    ndvi_index = (g - r) / (g + r + 1e-8)  # avoid division by zero
+    print(f"[{timestamp}] Captured and processed NDVI image saved to {ndvi_path}")
 
-    # --- Step 6: Normalize NDVI values to 0–255 for visualization ---
-    ndvi_normalized = cv2.normalize(ndvi_index, None, 0, 255, cv2.NORM_MINMAX)
-    ndvi_uint8 = ndvi_normalized.astype(np.uint8)
+# ========== MAIN LOOP ==========
+try:
+    print("System initialized. Waiting for START trigger on GPIO 5...")
+    capturing = False
 
-    # --- Step 7: Generate NDVI gradient map using colormap ---
-    ndvi_heatmap = cv2.applyColorMap(ndvi_uint8, colormap)
+    while True:
+        if GPIO.input(START_PIN) == GPIO.HIGH and not capturing:
+            print("START trigger detected. Beginning image capture in intervals of 10 seconds...")
+            capturing = True
+            time.sleep(1)
 
-    # --- Step 8: Save output image ---
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = os.path.splitext(os.path.basename(input_image_path))[0]
-    output_path = os.path.join(output_directory, f"{base_name}_NDVI_{timestamp}.png")
+        elif GPIO.input(STOP_PIN) == GPIO.HIGH and capturing:
+            print("STOP trigger detected. Ending capture process.")
+            capturing = False
+            time.sleep(1)
 
-    cv2.imwrite(output_path, ndvi_heatmap)
-    print(f"💾 NDVI gradient map saved to: {output_path}")
-    print("✅ Processing complete!")
+        if capturing:
+            capture_and_process()
+            for _ in range(CAPTURE_INTERVAL * 10):  # check stop pin every 0.1s
+                if GPIO.input(STOP_PIN) == GPIO.HIGH:
+                    print("STOP trigger detected during interval. Stopping.")
+                    capturing = False
+                    break
+                time.sleep(0.1)
 
-    return output_path
+        time.sleep(0.2)
+
+except KeyboardInterrupt:
+    print("Process interrupted manually. Cleaning up...")
+finally:
+    camera.close()
+    GPIO.cleanup()
+    print("GPIO cleaned up. Program ended safely.")
 
 
-if __name__ == "__main__":
-    # --- Configuration Section ---
-    INPUT_IMAGE_PATH = "/home/pi/images/input/flight_image.jpg"  # Change this path
-    OUTPUT_DIRECTORY = "/home/pi/images/output"                  # Change this path
-    COLORMAP = cv2.COLORMAP_TURBO  # Try also: JET, VIRIDIS, RAINBOW
 
-    try:
-        output_file = generate_ndvi_gradient(INPUT_IMAGE_PATH, OUTPUT_DIRECTORY, COLORMAP)
-        print(f"\n🌍 NDVI map generated successfully:\n{output_file}")
-    except Exception as e:
-        print(f"❌ Error: {str(e)}")
+
+
+# completed the code write, @viv check it...
