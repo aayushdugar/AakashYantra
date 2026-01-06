@@ -15,11 +15,10 @@ from datetime import datetime
 from skimage.metrics import structural_similarity as ssim
 
 # ---------- CONFIG ----------
-INPUT_DIR = "/home/pi/captures/ndvi"   # folder with NDVI images (timestamped)
-RAW_DIR = None                         # optional: folder with raw RGB images (not required)
-OUTPUT_DIR = "/home/pi/ndvi_map/"
+INPUT_DIR =  "/home/ay/vari/new"   # folder with NDVI images (timestamped)
+OUTPUT_DIR = "/home/ay/RAW_map/"
 OUTPUT_MAP_NAME = "ndvi_mosaic_{ts}.png"
-LOG_CSV = os.path.join(OUTPUT_DIR, "mosaic_log.csv")
+LOG_CSV = os.path.join(OUTPUT_DIR, "maplog.csv")
 
 # hashing thresholds and stitching params
 HASH_THRESHOLD = 6         # lower -> stricter duplicate detection
